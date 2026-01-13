@@ -8,22 +8,16 @@ import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 
 import {
   signupUser,
-  requestLoginOtp,
-  verifyLoginOtp,
+  requestOtp,
+  verifyOtp,
+  loginWithPassword,
+  adminLogin,
+  adminLoginGet,
   getMe,
 } from "../utils/authApi";
 
-const API_BASE_URL = "http://localhost:5000/api";
-
-// USER login (direct password login after OTP verified once)
-const PASSWORD_LOGIN_URL = `${API_BASE_URL}/auth/login/password`;
-
-// ✅ ADMIN login endpoint (as you said)
-const ADMIN_PASSWORD_LOGIN_URL = `${API_BASE_URL}/auth/admin/login`;
-
-// Where to go after login
 const USER_HOME = "/splash";
-const ADMIN_HOME = "/admin"; // ✅ change if your admin route is different
+const ADMIN_HOME = "/admin";
 
 function isEmail(v) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v || "").trim());
@@ -31,22 +25,6 @@ function isEmail(v) {
 function validatePassword(pass) {
   const p = String(pass || "");
   if (p.length < 8) throw new Error("Password must be at least 8 characters.");
-}
-
-async function apiFetch(url, options = {}) {
-  const res = await fetch(url, options);
-  const text = await res.text();
-  let json = null;
-  try {
-    json = text ? JSON.parse(text) : null;
-  } catch {
-    json = null;
-  }
-  if (!res.ok) {
-    const msg = json?.message || json?.error || `Request failed: ${res.status}`;
-    throw new Error(msg);
-  }
-  return json ?? {};
 }
 
 // ✅ token finder (supports many response shapes)
@@ -70,17 +48,13 @@ export default function Login() {
   // view: login / signup
   const [view, setView] = useState("login"); // "login" | "signup"
 
-  // ✅ login type: user / admin
+  // login type: user / admin
   const [loginAs, setLoginAs] = useState("user"); // "user" | "admin"
 
   // login fields
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginShowPass, setLoginShowPass] = useState(false);
-
-  // login steps
-  const [loginStep, setLoginStep] = useState("form"); // "form" | "otp"
-  const [loginOtp, setLoginOtp] = useState("");
 
   // signup fields
   const [firstName, setFirstName] = useState("");
@@ -89,7 +63,7 @@ export default function Login() {
   const [signupPassword, setSignupPassword] = useState("");
   const [signupShowPass, setSignupShowPass] = useState(false);
 
-  // signup steps
+  // signup steps (OTP only here)
   const [signupStep, setSignupStep] = useState("form"); // "form" | "otp"
   const [signupOtp, setSignupOtp] = useState("");
 
@@ -106,13 +80,11 @@ export default function Login() {
     return () => clearInterval(t);
   }, [cooldown]);
 
-  // optional: if token exists, go splash/home
+  // auto-redirect if token exists
   useEffect(() => {
     const token = localStorage.getItem("token");
     const role = localStorage.getItem("role");
-    if (token) {
-      navigate(role === "admin" ? ADMIN_HOME : USER_HOME);
-    }
+    if (token) navigate(role === "admin" ? ADMIN_HOME : USER_HOME);
   }, [navigate]);
 
   function resetMessages() {
@@ -124,21 +96,13 @@ export default function Login() {
     localStorage.setItem("token", token);
     localStorage.setItem("role", role);
     localStorage.setItem("auth_provider", provider);
-
-    // ✅ for users only: after OTP verified once, next logins can be direct
-    if (role === "user") localStorage.setItem("otp_verified_once", "1");
   }
 
   // -------------------------
-  // USER: direct password login (no OTP)
+  // ✅ USER LOGIN (NO OTP)
   // -------------------------
-  async function userPasswordLogin(email, password) {
-    const resp = await apiFetch(PASSWORD_LOGIN_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
-
+  async function handleUserLoginDirect(email, password) {
+    const resp = await loginWithPassword({ email, password });
     const token = extractToken(resp);
     if (!token) throw new Error("Token missing from server response.");
 
@@ -153,18 +117,12 @@ export default function Login() {
   }
 
   // -------------------------
-  // ADMIN: login via /api/auth/admin/login
-  // (tries POST first, then GET fallback)
+  // ✅ ADMIN LOGIN (NO OTP)
   // -------------------------
-  async function adminPasswordLogin(email, password) {
-    // 1) Try POST
+  async function handleAdminLogin(email, password) {
+    // Prefer POST
     try {
-      const resp = await apiFetch(ADMIN_PASSWORD_LOGIN_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-
+      const resp = await adminLogin({ email, password });
       const token = extractToken(resp);
       if (!token) throw new Error("Token missing from server response.");
 
@@ -177,30 +135,25 @@ export default function Login() {
 
       navigate(ADMIN_HOME);
       return;
-    } catch {
-      // continue to GET fallback
+    } catch (e) {
+      // fallback GET if your backend still uses GET
+      const resp = await adminLoginGet({ email, password });
+      const token = extractToken(resp);
+      if (!token) throw new Error("Token missing from server response.");
+
+      setAuthSuccess(token, "admin_password_get", "admin");
+
+      try {
+        const me = await getMe(token);
+        if (me) localStorage.setItem("me", JSON.stringify(me.user || me));
+      } catch {}
+
+      navigate(ADMIN_HOME);
     }
-
-    // 2) Fallback GET (NOT recommended, but supports your backend if it's GET)
-    const qs = new URLSearchParams({ email, password }).toString();
-    const url = `${ADMIN_PASSWORD_LOGIN_URL}?${qs}`;
-
-    const resp = await apiFetch(url, { method: "GET" });
-    const token = extractToken(resp);
-    if (!token) throw new Error("Token missing from server response.");
-
-    setAuthSuccess(token, "admin_password_get", "admin");
-
-    try {
-      const me = await getMe(token);
-      if (me) localStorage.setItem("me", JSON.stringify(me.user || me));
-    } catch {}
-
-    navigate(ADMIN_HOME);
   }
 
   // -------------------------
-  // LOGIN submit
+  // ✅ LOGIN submit (NO OTP for users)
   // -------------------------
   async function handleLoginSubmit(e) {
     e.preventDefault();
@@ -214,29 +167,11 @@ export default function Login() {
       if (!loginPassword) throw new Error("Please enter password.");
       validatePassword(loginPassword);
 
-      // ✅ Admin login = direct login (no OTP)
       if (loginAs === "admin") {
-        await adminPasswordLogin(email, loginPassword);
-        return;
+        await handleAdminLogin(email, loginPassword);
+      } else {
+        await handleUserLoginDirect(email, loginPassword);
       }
-
-      // ✅ User login: if OTP verified once already -> direct password login
-      const otpVerifiedOnce = localStorage.getItem("otp_verified_once") === "1";
-      if (otpVerifiedOnce) {
-        await userPasswordLogin(email, loginPassword);
-        return;
-      }
-
-      // ✅ First-time user login -> request OTP
-      await requestLoginOtp({
-        channel: "email",
-        identifier: email,
-        password: loginPassword,
-      });
-
-      setInfo("✅ OTP sent to your email (check Inbox/Spam).");
-      setLoginStep("otp");
-      setCooldown(30);
     } catch (err) {
       setError(err?.message || "Login failed.");
     } finally {
@@ -244,71 +179,8 @@ export default function Login() {
     }
   }
 
-  async function handleLoginVerifyOtp(e) {
-    e.preventDefault();
-    resetMessages();
-    setLoading(true);
-
-    try {
-      const email = String(loginEmail).trim().toLowerCase();
-      const otp = String(loginOtp).trim();
-
-      if (!isEmail(email)) throw new Error("Invalid email.");
-      if (!loginPassword) throw new Error("Password required.");
-      validatePassword(loginPassword);
-      if (!otp) throw new Error("Please enter OTP.");
-
-      const resp = await verifyLoginOtp({
-        channel: "email",
-        identifier: email,
-        password: loginPassword,
-        otp,
-      });
-
-      const token = extractToken(resp);
-      if (!token) throw new Error("Token missing from server response.");
-
-      setAuthSuccess(token, "otp", "user");
-
-      try {
-        const me = await getMe(token);
-        if (me?.user) localStorage.setItem("me", JSON.stringify(me.user));
-      } catch {}
-
-      navigate(USER_HOME);
-    } catch (err) {
-      setError(err?.message || "OTP verification failed.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleResendLoginOtp() {
-    resetMessages();
-    setLoading(true);
-
-    try {
-      const email = String(loginEmail).trim().toLowerCase();
-      if (!isEmail(email)) throw new Error("Enter a valid email.");
-      validatePassword(loginPassword);
-
-      await requestLoginOtp({
-        channel: "email",
-        identifier: email,
-        password: loginPassword,
-      });
-
-      setInfo("✅ OTP resent to your email.");
-      setCooldown(30);
-    } catch (err) {
-      setError(err?.message || "Failed to resend OTP.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
   // -------------------------
-  // SIGNUP (User only)
+  // ✅ SIGNUP submit (OTP ONLY here)
   // -------------------------
   async function handleSignupSubmit(e) {
     e.preventDefault();
@@ -327,6 +199,7 @@ export default function Login() {
       if (!signupPassword) throw new Error("Password is required.");
       validatePassword(signupPassword);
 
+      // 1) create user
       await signupUser({
         firstName: fn,
         lastName: ln,
@@ -334,7 +207,8 @@ export default function Login() {
         password: signupPassword,
       });
 
-      await requestLoginOtp({
+      // 2) send OTP (only for signup verification)
+      await requestOtp({
         channel: "email",
         identifier: em,
         password: signupPassword,
@@ -363,7 +237,7 @@ export default function Login() {
       validatePassword(signupPassword);
       if (!otp) throw new Error("Please enter OTP.");
 
-      const resp = await verifyLoginOtp({
+      const resp = await verifyOtp({
         channel: "email",
         identifier: em,
         password: signupPassword,
@@ -373,11 +247,11 @@ export default function Login() {
       const token = extractToken(resp);
       if (!token) throw new Error("Token missing from server response.");
 
-      setAuthSuccess(token, "otp", "user");
+      setAuthSuccess(token, "signup_otp", "user");
 
       try {
         const me = await getMe(token);
-        if (me?.user) localStorage.setItem("me", JSON.stringify(me.user));
+        if (me) localStorage.setItem("me", JSON.stringify(me.user || me));
       } catch {}
 
       navigate(USER_HOME);
@@ -397,7 +271,7 @@ export default function Login() {
       if (!isEmail(em)) throw new Error("Enter a valid email.");
       validatePassword(signupPassword);
 
-      await requestLoginOtp({
+      await requestOtp({
         channel: "email",
         identifier: em,
         password: signupPassword,
@@ -429,28 +303,21 @@ export default function Login() {
           🙏 Sri Andhra Valmiki
         </h1>
         <p className="text-yellow-100 text-sm mb-6 text-center">
-          User: first time OTP, next time direct. Admin: direct login.
+          ✅ Login = direct. ✅ Signup = OTP verify.
         </p>
 
-        {error ? (
-          <p className="text-red-200 text-sm mb-2 text-center">{error}</p>
-        ) : null}
-        {info ? (
-          <p className="text-green-100 text-sm mb-2 text-center">{info}</p>
-        ) : null}
+        {error ? <p className="text-red-200 text-sm mb-2 text-center">{error}</p> : null}
+        {info ? <p className="text-green-100 text-sm mb-2 text-center">{info}</p> : null}
 
-        {/* ---------------- LOGIN VIEW ---------------- */}
         {view === "login" ? (
           <>
-            {/* ✅ User/Admin Toggle */}
+            {/* User/Admin Toggle */}
             <div className="flex gap-2 mb-4">
               <button
                 type="button"
                 onClick={() => {
                   resetMessages();
                   setLoginAs("user");
-                  setLoginStep("form");
-                  setLoginOtp("");
                 }}
                 className={`flex-1 py-2 rounded-lg font-semibold transition ${
                   loginAs === "user"
@@ -466,8 +333,6 @@ export default function Login() {
                 onClick={() => {
                   resetMessages();
                   setLoginAs("admin");
-                  setLoginStep("form"); // ✅ admin no OTP
-                  setLoginOtp("");
                 }}
                 className={`flex-1 py-2 rounded-lg font-semibold transition ${
                   loginAs === "admin"
@@ -479,154 +344,87 @@ export default function Login() {
               </button>
             </div>
 
-            {loginStep === "form" ? (
-              <form onSubmit={handleLoginSubmit} className="text-left space-y-4">
-                <div>
-                  <label className="block text-white text-sm font-semibold mb-1">
-                    Email Address
-                  </label>
+            <form onSubmit={handleLoginSubmit} className="text-left space-y-4">
+              <div>
+                <label className="block text-white text-sm font-semibold mb-1">
+                  Email Address
+                </label>
+                <input
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  placeholder="user@gmail.com"
+                  className="w-full px-4 py-2 rounded-lg bg-white/80 focus:bg-white text-gray-800 placeholder-gray-500 border border-gray-300 focus:ring-2 focus:ring-orange-400 outline-none transition"
+                />
+              </div>
+
+              <div>
+                <label className="block text-white text-sm font-semibold mb-1">
+                  Password
+                </label>
+                <div className="relative">
                   <input
-                    value={loginEmail}
-                    onChange={(e) => setLoginEmail(e.target.value)}
-                    placeholder="user@gmail.com"
-                    className="w-full px-4 py-2 rounded-lg bg-white/80 focus:bg-white text-gray-800 placeholder-gray-500 border border-gray-300 focus:ring-2 focus:ring-orange-400 outline-none transition"
+                    type={loginShowPass ? "text" : "password"}
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    placeholder="Enter password (min 8 chars)"
+                    className="w-full pr-11 px-4 py-2 rounded-lg bg-white/80 focus:bg-white text-gray-800 placeholder-gray-500 border border-gray-300 focus:ring-2 focus:ring-orange-400 outline-none transition"
                   />
-                </div>
-
-                <div>
-                  <label className="block text-white text-sm font-semibold mb-1">
-                    Password
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={loginShowPass ? "text" : "password"}
-                      value={loginPassword}
-                      onChange={(e) => setLoginPassword(e.target.value)}
-                      placeholder="Enter password (min 8 chars)"
-                      className="w-full pr-11 px-4 py-2 rounded-lg bg-white/80 focus:bg-white text-gray-800 placeholder-gray-500 border border-gray-300 focus:ring-2 focus:ring-orange-400 outline-none transition"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setLoginShowPass((s) => !s)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-700 hover:text-gray-900"
-                      aria-label="Toggle password visibility"
-                    >
-                      {loginShowPass ? (
-                        <VisibilityIcon fontSize="small" />
-                      ) : (
-                        <VisibilityOffIcon fontSize="small" />
-                      )}
-                    </button>
-                  </div>
-                  <p className="text-[11px] text-yellow-50/90 mt-1">
-                    Password must be at least 8 characters.
-                  </p>
-                </div>
-
-                {/* ✅ Admin demo autofill */}
-                {loginAs === "admin" && (
                   <button
                     type="button"
-                    onClick={() => {
-                      setLoginEmail("admin@gmail.com");
-                      setLoginPassword("Admin@12345");
-                      resetMessages();
-                    }}
-                    className="w-full py-2 bg-white/25 hover:bg-white/35 text-white font-semibold rounded-full shadow transition"
+                    onClick={() => setLoginShowPass((s) => !s)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-700 hover:text-gray-900"
+                    aria-label="Toggle password visibility"
                   >
-                    Use Admin Demo Credentials
+                    {loginShowPass ? (
+                      <VisibilityIcon fontSize="small" />
+                    ) : (
+                      <VisibilityOffIcon fontSize="small" />
+                    )}
                   </button>
-                )}
+                </div>
+              </div>
 
+              {loginAs === "admin" && (
                 <button
-                  type="submit"
-                  disabled={loading}
-                  className={`w-full py-2 bg-gradient-to-r from-orange-500 to-yellow-500 hover:from-orange-600 hover:to-yellow-600 text-white font-bold rounded-full shadow-lg transition ${
-                    loading ? "opacity-70 cursor-not-allowed" : ""
-                  }`}
+                  type="button"
+                  onClick={() => {
+                    setLoginEmail("admin@gmail.com");
+                    setLoginPassword("Admin@12345");
+                    resetMessages();
+                  }}
+                  className="w-full py-2 bg-white/25 hover:bg-white/35 text-white font-semibold rounded-full shadow transition"
                 >
-                  {loading ? "Please wait..." : "Login"}
+                  Use Admin Demo Credentials
                 </button>
+              )}
 
-                {/* ✅ Signup button only for USER */}
-                {loginAs === "user" && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      resetMessages();
-                      setView("signup");
-                      setSignupStep("form");
-                      setCooldown(0);
-                    }}
-                    className="w-full text-xs text-white/90 underline hover:text-white"
-                  >
-                    Don&apos;t have an account? Sign Up
-                  </button>
-                )}
-              </form>
-            ) : (
-              // OTP (only user)
-              <form onSubmit={handleLoginVerifyOtp} className="text-left space-y-3">
-                <div>
-                  <label className="block text-white text-sm font-semibold mb-1">
-                    OTP
-                  </label>
-                  <input
-                    value={loginOtp}
-                    onChange={(e) => setLoginOtp(e.target.value)}
-                    placeholder="Enter OTP"
-                    className="w-full px-4 py-2 rounded-lg bg-white/80 focus:bg-white text-gray-800 placeholder-gray-500 border border-gray-300 focus:ring-2 focus:ring-orange-400 outline-none transition tracking-widest"
-                  />
-                  <p className="text-[11px] text-yellow-50/90 mt-1">
-                    OTP sent to:{" "}
-                    <span className="font-semibold">
-                      {String(loginEmail).trim().toLowerCase()}
-                    </span>
-                  </p>
-                </div>
+              <button
+                type="submit"
+                disabled={loading}
+                className={`w-full py-2 bg-gradient-to-r from-orange-500 to-yellow-500 hover:from-orange-600 hover:to-yellow-600 text-white font-bold rounded-full shadow-lg transition ${
+                  loading ? "opacity-70 cursor-not-allowed" : ""
+                }`}
+              >
+                {loading ? "Please wait..." : "Login"}
+              </button>
 
+              {loginAs === "user" && (
                 <button
-                  type="submit"
-                  disabled={loading}
-                  className={`w-full py-2 bg-gradient-to-r from-orange-500 to-yellow-500 hover:from-orange-600 hover:to-yellow-600 text-white font-bold rounded-full shadow-lg transition ${
-                    loading ? "opacity-70 cursor-not-allowed" : ""
-                  }`}
+                  type="button"
+                  onClick={() => {
+                    resetMessages();
+                    setView("signup");
+                    setSignupStep("form");
+                    setCooldown(0);
+                  }}
+                  className="w-full text-xs text-white/90 underline hover:text-white"
                 >
-                  {loading ? "Verifying..." : "Verify OTP & Login"}
+                  Don&apos;t have an account? Sign Up
                 </button>
-
-                <div className="flex items-center justify-between">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      resetMessages();
-                      setLoginStep("form");
-                      setLoginOtp("");
-                      setCooldown(0);
-                    }}
-                    className="text-xs text-white/90 underline hover:text-white"
-                  >
-                    Change details
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleResendLoginOtp}
-                    disabled={cooldown > 0 || loading}
-                    className={`text-xs underline ${
-                      cooldown > 0 || loading
-                        ? "text-white/50 cursor-not-allowed"
-                        : "text-white/90 hover:text-white"
-                    }`}
-                  >
-                    {cooldown > 0 ? `Resend in ${cooldown}s` : "Resend OTP"}
-                  </button>
-                </div>
-              </form>
-            )}
+              )}
+            </form>
           </>
         ) : (
-          /* ---------------- SIGNUP VIEW ---------------- */
           <>
             {signupStep === "form" ? (
               <form onSubmit={handleSignupSubmit} className="text-left space-y-4">
@@ -642,7 +440,6 @@ export default function Login() {
                       className="w-full px-4 py-2 rounded-lg bg-white/80 focus:bg-white text-gray-800 placeholder-gray-500 border border-gray-300 focus:ring-2 focus:ring-orange-400 outline-none transition"
                     />
                   </div>
-
                   <div>
                     <label className="block text-white text-sm font-semibold mb-1">
                       Last Name
@@ -693,9 +490,6 @@ export default function Login() {
                       )}
                     </button>
                   </div>
-                  <p className="text-[11px] text-yellow-50/90 mt-1">
-                    Password must be at least 8 characters.
-                  </p>
                 </div>
 
                 <button
@@ -714,7 +508,6 @@ export default function Login() {
                     resetMessages();
                     setView("login");
                     setLoginAs("user");
-                    setLoginStep("form");
                     setCooldown(0);
                   }}
                   className="w-full text-xs text-white/90 underline hover:text-white"
