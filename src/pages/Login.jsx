@@ -11,7 +11,6 @@ import {
   requestOtp,
   verifyOtp,
   loginWithPassword,
-  adminLogin,
   adminLoginGet,
   getMe,
 } from "../utils/authApi";
@@ -19,12 +18,23 @@ import {
 const USER_HOME = "/splash";
 const ADMIN_HOME = "/admin";
 
+const ADMIN_EMAIL = "sriandhravalmiki@gmail.com";
+const ADMIN_PASSWORD = "rama@2026";
+
 function isEmail(v) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v || "").trim());
 }
-function validatePassword(pass) {
+
+// ✅ user password rule
+function validateUserPassword(pass) {
   const p = String(pass || "");
   if (p.length < 8) throw new Error("Password must be at least 8 characters.");
+}
+
+// ✅ admin password rule (only required non-empty)
+function validateAdminPassword(pass) {
+  const p = String(pass || "");
+  if (!p.trim()) throw new Error("Admin password is required.");
 }
 
 // ✅ token finder (supports many response shapes)
@@ -42,14 +52,53 @@ function extractToken(resp) {
   );
 }
 
+// ✅ NEW: download helper
+function forceDownload(url, filename = "file.pdf") {
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename; // might be ignored cross-origin, still ok
+    a.rel = "noopener noreferrer";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } catch {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+}
+
+// ✅ NEW: after-login handler (download + redirect)
+function runAfterLoginAction(navigate, role = "user") {
+  const dlRaw = sessionStorage.getItem("after_login_download");
+  const redirect =
+    sessionStorage.getItem("after_login_redirect") ||
+    (role === "admin" ? ADMIN_HOME : USER_HOME);
+
+  if (!dlRaw) {
+    navigate(role === "admin" ? ADMIN_HOME : USER_HOME, { replace: true });
+    return;
+  }
+
+  try {
+    const { url, filename } = JSON.parse(dlRaw);
+
+    // download now
+    if (url) forceDownload(url, filename || "file.pdf");
+  } catch {}
+
+  // clear session keys
+  sessionStorage.removeItem("after_login_download");
+  sessionStorage.removeItem("after_login_redirect");
+
+  // go back to the page user came from
+  navigate(redirect, { replace: true });
+}
+
 export default function Login() {
   const navigate = useNavigate();
 
   // view: login / signup
   const [view, setView] = useState("login"); // "login" | "signup"
-
-  // login type: user / admin
-  const [loginAs, setLoginAs] = useState("user"); // "user" | "admin"
 
   // login fields
   const [loginEmail, setLoginEmail] = useState("");
@@ -84,7 +133,10 @@ export default function Login() {
   useEffect(() => {
     const token = localStorage.getItem("token");
     const role = localStorage.getItem("role");
-    if (token) navigate(role === "admin" ? ADMIN_HOME : USER_HOME);
+    if (token) {
+      // ✅ if already logged in and a download is pending, run it
+      runAfterLoginAction(navigate, role === "admin" ? "admin" : "user");
+    }
   }, [navigate]);
 
   function resetMessages() {
@@ -113,47 +165,33 @@ export default function Login() {
       if (me) localStorage.setItem("me", JSON.stringify(me.user || me));
     } catch {}
 
-    navigate(USER_HOME);
+    // ✅ NEW: download after login if pending, else go normal
+    runAfterLoginAction(navigate, "user");
   }
 
   // -------------------------
-  // ✅ ADMIN LOGIN (NO OTP)
+  // ✅ ADMIN LOGIN (GET ONLY)
   // -------------------------
-  async function handleAdminLogin(email, password) {
-    // Prefer POST
+  async function handleAdminLoginGet(email, password) {
+    const resp = await adminLoginGet({ email, password });
+    const token = extractToken(resp);
+    if (!token) throw new Error("Token missing from server response.");
+
+    setAuthSuccess(token, "admin_get", "admin");
+
     try {
-      const resp = await adminLogin({ email, password });
-      const token = extractToken(resp);
-      if (!token) throw new Error("Token missing from server response.");
+      const me = await getMe(token);
+      if (me) localStorage.setItem("me", JSON.stringify(me.user || me));
+    } catch {}
 
-      setAuthSuccess(token, "admin_password", "admin");
-
-      try {
-        const me = await getMe(token);
-        if (me) localStorage.setItem("me", JSON.stringify(me.user || me));
-      } catch {}
-
-      navigate(ADMIN_HOME);
-      return;
-    } catch (e) {
-      // fallback GET if your backend still uses GET
-      const resp = await adminLoginGet({ email, password });
-      const token = extractToken(resp);
-      if (!token) throw new Error("Token missing from server response.");
-
-      setAuthSuccess(token, "admin_password_get", "admin");
-
-      try {
-        const me = await getMe(token);
-        if (me) localStorage.setItem("me", JSON.stringify(me.user || me));
-      } catch {}
-
-      navigate(ADMIN_HOME);
-    }
+    // ✅ NEW: if download was pending, do it then redirect back
+    runAfterLoginAction(navigate, "admin");
   }
 
   // -------------------------
-  // ✅ LOGIN submit (NO OTP for users)
+  // ✅ LOGIN submit (Single Form)
+  // - If sriandhravalmiki@gmail.com => GET admin login
+  // - else => normal user login
   // -------------------------
   async function handleLoginSubmit(e) {
     e.preventDefault();
@@ -162,15 +200,20 @@ export default function Login() {
 
     try {
       const email = String(loginEmail).trim().toLowerCase();
+      const pass = String(loginPassword || "");
+
       if (!email) throw new Error("Please enter email.");
       if (!isEmail(email)) throw new Error("Please enter a valid email.");
-      if (!loginPassword) throw new Error("Please enter password.");
-      validatePassword(loginPassword);
+      if (!pass) throw new Error("Please enter password.");
 
-      if (loginAs === "admin") {
-        await handleAdminLogin(email, loginPassword);
+      // ✅ ADMIN path (GET)
+      if (email === ADMIN_EMAIL) {
+        validateAdminPassword(pass);
+        await handleAdminLoginGet(email, pass);
       } else {
-        await handleUserLoginDirect(email, loginPassword);
+        // ✅ USER path
+        validateUserPassword(pass);
+        await handleUserLoginDirect(email, pass);
       }
     } catch (err) {
       setError(err?.message || "Login failed.");
@@ -197,7 +240,11 @@ export default function Login() {
       if (!em) throw new Error("Email is required.");
       if (!isEmail(em)) throw new Error("Please enter a valid email.");
       if (!signupPassword) throw new Error("Password is required.");
-      validatePassword(signupPassword);
+      validateUserPassword(signupPassword);
+
+      if (em === ADMIN_EMAIL) {
+        throw new Error("This email is reserved for admin.");
+      }
 
       // 1) create user
       await signupUser({
@@ -234,7 +281,7 @@ export default function Login() {
       const otp = String(signupOtp).trim();
 
       if (!isEmail(em)) throw new Error("Invalid email.");
-      validatePassword(signupPassword);
+      validateUserPassword(signupPassword);
       if (!otp) throw new Error("Please enter OTP.");
 
       const resp = await verifyOtp({
@@ -254,7 +301,8 @@ export default function Login() {
         if (me) localStorage.setItem("me", JSON.stringify(me.user || me));
       } catch {}
 
-      navigate(USER_HOME);
+      // ✅ NEW: download after signup-login too (if pending)
+      runAfterLoginAction(navigate, "user");
     } catch (err) {
       setError(err?.message || "OTP verification failed.");
     } finally {
@@ -269,7 +317,7 @@ export default function Login() {
     try {
       const em = String(signupEmail).trim().toLowerCase();
       if (!isEmail(em)) throw new Error("Enter a valid email.");
-      validatePassword(signupPassword);
+      validateUserPassword(signupPassword);
 
       await requestOtp({
         channel: "email",
@@ -303,7 +351,7 @@ export default function Login() {
           🙏 Sri Andhra Valmiki
         </h1>
         <p className="text-yellow-100 text-sm mb-6 text-center">
-          ✅ Login = direct. ✅ Signup = OTP verify.
+          ✅ Single Login form (User/Admin). ✅ Signup = OTP verify.
         </p>
 
         {error ? <p className="text-red-200 text-sm mb-2 text-center">{error}</p> : null}
@@ -311,39 +359,6 @@ export default function Login() {
 
         {view === "login" ? (
           <>
-            {/* User/Admin Toggle */}
-            <div className="flex gap-2 mb-4">
-              <button
-                type="button"
-                onClick={() => {
-                  resetMessages();
-                  setLoginAs("user");
-                }}
-                className={`flex-1 py-2 rounded-lg font-semibold transition ${
-                  loginAs === "user"
-                    ? "bg-white text-gray-800"
-                    : "bg-white/20 text-white hover:bg-white/30"
-                }`}
-              >
-                User Login
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  resetMessages();
-                  setLoginAs("admin");
-                }}
-                className={`flex-1 py-2 rounded-lg font-semibold transition ${
-                  loginAs === "admin"
-                    ? "bg-white text-gray-800"
-                    : "bg-white/20 text-white hover:bg-white/30"
-                }`}
-              >
-                Admin Login
-              </button>
-            </div>
-
             <form onSubmit={handleLoginSubmit} className="text-left space-y-4">
               <div>
                 <label className="block text-white text-sm font-semibold mb-1">
@@ -355,6 +370,9 @@ export default function Login() {
                   placeholder="user@gmail.com"
                   className="w-full px-4 py-2 rounded-lg bg-white/80 focus:bg-white text-gray-800 placeholder-gray-500 border border-gray-300 focus:ring-2 focus:ring-orange-400 outline-none transition"
                 />
+                <p className="text-[11px] text-yellow-50/90 mt-1">
+                  Admin login: <b>sriandhravalmiki@gmail.com</b> / <b>rama@2026</b>
+                </p>
               </div>
 
               <div>
@@ -366,7 +384,7 @@ export default function Login() {
                     type={loginShowPass ? "text" : "password"}
                     value={loginPassword}
                     onChange={(e) => setLoginPassword(e.target.value)}
-                    placeholder="Enter password (min 8 chars)"
+                    placeholder="Enter password"
                     className="w-full pr-11 px-4 py-2 rounded-lg bg-white/80 focus:bg-white text-gray-800 placeholder-gray-500 border border-gray-300 focus:ring-2 focus:ring-orange-400 outline-none transition"
                   />
                   <button
@@ -384,19 +402,18 @@ export default function Login() {
                 </div>
               </div>
 
-              {loginAs === "admin" && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginEmail("admin@gmail.com");
-                    setLoginPassword("Admin@12345");
-                    resetMessages();
-                  }}
-                  className="w-full py-2 bg-white/25 hover:bg-white/35 text-white font-semibold rounded-full shadow transition"
-                >
-                  Use Admin Demo Credentials
-                </button>
-              )}
+              {/* Optional helper button */}
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginEmail(ADMIN_EMAIL);
+                  setLoginPassword(ADMIN_PASSWORD);
+                  resetMessages();
+                }}
+                className="w-full py-2 bg-white/25 hover:bg-white/35 text-white font-semibold rounded-full shadow transition"
+              >
+                Use Admin Credentials
+              </button>
 
               <button
                 type="submit"
@@ -408,20 +425,18 @@ export default function Login() {
                 {loading ? "Please wait..." : "Login"}
               </button>
 
-              {loginAs === "user" && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    resetMessages();
-                    setView("signup");
-                    setSignupStep("form");
-                    setCooldown(0);
-                  }}
-                  className="w-full text-xs text-white/90 underline hover:text-white"
-                >
-                  Don&apos;t have an account? Sign Up
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => {
+                  resetMessages();
+                  setView("signup");
+                  setSignupStep("form");
+                  setCooldown(0);
+                }}
+                className="w-full text-xs text-white/90 underline hover:text-white"
+              >
+                Don&apos;t have an account? Sign Up
+              </button>
             </form>
           </>
         ) : (
@@ -507,7 +522,6 @@ export default function Login() {
                   onClick={() => {
                     resetMessages();
                     setView("login");
-                    setLoginAs("user");
                     setCooldown(0);
                   }}
                   className="w-full text-xs text-white/90 underline hover:text-white"

@@ -1,10 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import ArrowForwardIosIcon from "@mui/icons-material/ArrowForwardIos";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import DescriptionIcon from "@mui/icons-material/Description";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import TopicIcon from "@mui/icons-material/Topic";
 import PictureAsPdfIcon from "@mui/icons-material/PictureAsPdf";
+import CloseIcon from "@mui/icons-material/Close";
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import { useTranslation } from "react-i18next";
 
 // ✅ IMPORTANT: your content APIs are mounted at /api/content
@@ -26,9 +29,25 @@ const getId = (item) =>
   item?.contentId ??
   null;
 
+function forceDownload(url, filename = "file.pdf") {
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename; // may be ignored by browser for cross-origin
+    a.rel = "noopener noreferrer";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } catch {
+    // fallback
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+}
+
 const Articles = () => {
   const { t, i18n } = useTranslation();
   const lang = i18n.language || "en";
+  const navigate = useNavigate();
 
   // ✅ pick localized field if present: title_te, description_te, body_te...
   const pick = (obj, field, fallback = "") => {
@@ -64,6 +83,40 @@ const Articles = () => {
   // ✅ PDFs cache: key = `${parentType}:${parentId}`
   const [pdfsByKey, setPdfsByKey] = useState({});
   const [pdfLoadingByKey, setPdfLoadingByKey] = useState({});
+
+  // ✅ In-page PDF Viewer state
+  const [pdfViewer, setPdfViewer] = useState(null); // { url, title }
+
+  const closePdfViewer = () => setPdfViewer(null);
+  const openPdfViewer = (url, title) => setPdfViewer({ url, title });
+
+  // ESC closes PDF viewer
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") closePdfViewer();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const requireLoginThenDownload = (pdfUrl, filename) => {
+    const token = localStorage.getItem("token");
+    if (token) {
+      forceDownload(pdfUrl, filename);
+      return;
+    }
+
+    // store download request for after login
+    sessionStorage.setItem(
+      "after_login_download",
+      JSON.stringify({ url: pdfUrl, filename })
+    );
+    // store where to come back
+    sessionStorage.setItem("after_login_redirect", window.location.pathname);
+
+    // go login
+    navigate("/login");
+  };
 
   const fetchPdfs = async (parentType, parentId) => {
     if (!parentType || !parentId) return;
@@ -127,7 +180,6 @@ const Articles = () => {
         [articleId]: normalizeArrayResponse(json),
       }));
 
-      // ✅ Optional: if you attach PDFs to Article in admin, fetch them too
       fetchPdfs("article", articleId);
     } catch (e) {
       console.error(e);
@@ -153,7 +205,6 @@ const Articles = () => {
         [chapterId]: normalizeArrayResponse(json),
       }));
 
-      // ✅ Optional: chapter PDFs
       fetchPdfs("chapter", chapterId);
     } catch (e) {
       console.error(e);
@@ -177,11 +228,10 @@ const Articles = () => {
       const contents = normalizeArrayResponse(json);
       setContentsByTopic((p) => ({ ...p, [topicId]: contents }));
 
-      // ✅ THIS IS THE MAIN FIX:
-      // fetch PDFs attached to this topic
+      // topic PDFs
       fetchPdfs("topic", topicId);
 
-      // fetch PDFs attached to each content block
+      // each content PDFs
       for (const c of contents) {
         const cid = getId(c);
         if (cid) fetchPdfs("content", cid);
@@ -210,6 +260,10 @@ const Articles = () => {
   const currentContents = currentTopic ? contentsByTopic[view.topicId] || [] : [];
 
   const goBack = () => {
+    if (pdfViewer) {
+      closePdfViewer();
+      return;
+    }
     if (view.level === "contents") setView((p) => ({ ...p, level: "topics", topicId: null }));
     else if (view.level === "topics")
       setView((p) => ({ ...p, level: "chapters", chapterId: null }));
@@ -289,6 +343,8 @@ const Articles = () => {
             {list.map((p) => {
               const pid = getId(p) || p.url;
               const name = p.title || p.originalName || "PDF";
+              const url = p.url;
+
               return (
                 <div
                   key={pid}
@@ -297,21 +353,21 @@ const Articles = () => {
                   <div className="text-sm font-semibold text-slate-800 line-clamp-1">{name}</div>
 
                   <div className="flex items-center gap-2">
-                    <a
-                      href={p.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    {/* ✅ VIEW: open inside same page */}
+                    <button
+                      onClick={() => openPdfViewer(url, name)}
                       className="px-4 py-2 text-sm font-medium text-orange-600 bg-white hover:bg-orange-50 border-2 border-orange-300 hover:border-orange-400 rounded-lg transition-all duration-200"
                     >
                       {t("view_pdf")}
-                    </a>
-                    <a
-                      href={p.url}
-                      download
+                    </button>
+
+                    {/* ✅ DOWNLOAD: require login */}
+                    <button
+                      onClick={() => requireLoginThenDownload(url, `${name}.pdf`)}
                       className="px-4 py-2 text-sm font-medium text-white bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 rounded-lg shadow-md hover:shadow-lg transition-all duration-200"
                     >
                       {t("download")}
-                    </a>
+                    </button>
                   </div>
                 </div>
               );
@@ -324,6 +380,60 @@ const Articles = () => {
 
   return (
     <section className="px-3 sm:px-6 lg:px-10 py-6 sm:py-8 lg:py-12 bg-gradient-to-br from-slate-50 via-orange-50/30 to-slate-50 min-h-[70vh]">
+      {/* ✅ PDF VIEWER OVERLAY (same page) */}
+      {pdfViewer && (
+        <div className="fixed inset-0 z-[9999] bg-black/70 flex items-center justify-center p-3 sm:p-6">
+          <div className="w-full max-w-6xl h-[85vh] bg-white rounded-2xl overflow-hidden shadow-2xl border border-white/20">
+            {/* Header */}
+            <div className="flex items-center justify-between gap-3 px-4 sm:px-6 py-3 bg-gradient-to-r from-orange-500 to-amber-500 text-white">
+              <button
+                onClick={closePdfViewer}
+                className="inline-flex items-center gap-2 px-3 py-2 bg-white/15 hover:bg-white/25 rounded-xl transition"
+                title={t("back")}
+              >
+                <ArrowBackIcon fontSize="small" />
+                <span className="text-sm font-semibold">{t("back")}</span>
+              </button>
+
+              <div className="flex-1 text-center px-2">
+                <div className="text-sm sm:text-base font-extrabold line-clamp-1">
+                  {pdfViewer.title || "PDF"}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <a
+                  href={pdfViewer.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-white/15 hover:bg-white/25 transition"
+                  title="Open in new tab"
+                >
+                  <OpenInNewIcon fontSize="small" />
+                </a>
+
+                <button
+                  onClick={closePdfViewer}
+                  className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-white/15 hover:bg-white/25 transition"
+                  title="Close"
+                >
+                  <CloseIcon fontSize="small" />
+                </button>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="w-full h-[calc(85vh-56px)] bg-slate-100">
+              <iframe
+                src={pdfViewer.url}
+                title={pdfViewer.title || "PDF"}
+                className="w-full h-full"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-6xl mx-auto">
         <div className="mb-6 sm:mb-8">
           <div className="flex items-center gap-3 mb-4">
@@ -447,9 +557,6 @@ const Articles = () => {
         {/* CHAPTERS */}
         {view.level === "chapters" && currentArticle && (
           <>
-            {/* Optional: Article PDFs */}
-            {/* <PdfList title="PDFs for this Article" parentType="article" parentId={view.articleId} /> */}
-
             {loading.chapters && (
               <div className="flex items-center justify-center py-12">
                 <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-slate-600"></div>
@@ -510,9 +617,6 @@ const Articles = () => {
         {/* TOPICS */}
         {view.level === "topics" && currentChapter && (
           <>
-            {/* Optional: Chapter PDFs */}
-            {/* <PdfList title="PDFs for this Chapter" parentType="chapter" parentId={view.chapterId} /> */}
-
             {loading.topics && (
               <div className="flex items-center justify-center py-12">
                 <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-slate-600"></div>
@@ -555,7 +659,9 @@ const Articles = () => {
                             {pick(topic, "description", "")}
                           </p>
                         ) : (
-                          <p className="text-sm text-slate-400 italic">{t("description_not_added")}</p>
+                          <p className="text-sm text-slate-400 italic">
+                            {t("description_not_added")}
+                          </p>
                         )}
                       </div>
 
@@ -571,9 +677,6 @@ const Articles = () => {
         {/* CONTENTS */}
         {view.level === "contents" && currentTopic && (
           <>
-            {/* ✅ Topic PDFs (this is what admin uploads with parentType=topic) */}
-            {/* <PdfList title="PDFs for this Topic" parentType="topic" parentId={view.topicId} /> */}
-
             {loading.contents && (
               <div className="flex items-center justify-center py-12">
                 <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-500"></div>
@@ -604,18 +707,6 @@ const Articles = () => {
                             <h3 className="text-lg font-bold text-slate-800 mb-1">
                               {pick(content, "heading", `Content Block ${index + 1}`)}
                             </h3>
-                            <div className="flex flex-wrap items-center gap-3">
-                              {pick(content, "label", "") && (
-                                <span className="text-xs text-slate-500 bg-white px-3 py-1 rounded-full border border-slate-200">
-                                  {pick(content, "label", "")}
-                                </span>
-                              )}
-                              {content.order !== undefined && content.order !== null && (
-                                <span className="text-xs font-semibold text-orange-600 bg-orange-50 px-3 py-1 rounded-full">
-                                  Order #{content.order}
-                                </span>
-                              )}
-                            </div>
                           </div>
                         </div>
                       </div>
@@ -625,7 +716,7 @@ const Articles = () => {
                           {pick(content, "body", "")}
                         </p>
 
-                        {/* ✅ Content PDFs (this is what admin uploads with parentType=content) */}
+                        {/* PDFs for this content */}
                         <div className="mt-5">
                           <PdfList
                             title={`PDFs for Content #${index + 1}`}

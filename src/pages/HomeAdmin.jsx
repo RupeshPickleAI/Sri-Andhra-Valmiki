@@ -31,7 +31,7 @@ const VIDEOS_API_URL = `${API_BASE_URL}/videos`;
 const AUDIO_UPLOAD_URL = `${API_BASE_URL}/upload/audio`;
 const AUDIO_LIST_URL = `${API_BASE_URL}/audio`;
 
-const VIDEOS_STORAGE_KEY = "bhaktiVideos";
+// const VIDEOS_STORAGE_KEY = "bhaktiVideos";
 
 // ✅ NEW: Gallery Folder/Image APIs
 const GALLERY_FOLDERS_URL = `${API_BASE_URL}/gallery/folders`; // GET/POST
@@ -91,8 +91,23 @@ const getImageSrc = (item) =>
 const getCaption = (item) => item?.caption || item?.title || item?.name || "";
 
 async function apiFetch(url, options = {}) {
-  const res = await fetch(url, options);
+  const token = localStorage.getItem("token");
+
+  // ✅ Always attach Authorization Bearer token (backend needs it for POST/PUT/DELETE)
+  const headers = new Headers(options.headers || {});
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  // ✅ Do NOT set Content-Type for FormData (browser adds correct boundary)
+  const finalOptions = {
+    ...options,
+    headers,
+  };
+
+  const res = await fetch(url, finalOptions);
   const text = await res.text();
+
   let json = null;
   try {
     json = text ? JSON.parse(text) : null;
@@ -102,22 +117,27 @@ async function apiFetch(url, options = {}) {
 
   if (!res.ok) {
     const msg =
-      json?.message || json?.error || `Request failed: ${res.status} ${res.statusText}`;
+      json?.message ||
+      json?.error ||
+      `Request failed: ${res.status} ${res.statusText}`;
+
     const err = new Error(msg);
     err.status = res.status;
     err.url = url;
     err.payload = json ?? text;
     throw err;
   }
+
   return json ?? {};
 }
+
 
 const HomeAdmin = () => {
 
    
 
   // ✅ Admin Auth Gate (MOVE HERE)
-  const ADMIN_EMAIL = "admin@gmail.com";
+  const ADMIN_EMAIL = "sriandhravalmiki@gmail.com";
   const [adminAuthed, setAdminAuthed] = useState(false);
   const [adminPass, setAdminPass] = useState("");
   const [adminLoading, setAdminLoading] = useState(false);
@@ -192,12 +212,47 @@ const HomeAdmin = () => {
   const [notifMessage, setNotifMessage] = useState("");
   const [notifText, setNotifText] = useState("");
 
+
+  const fetchHomeSettings = async () => {
+  try {
+    const json = await apiFetch(HOME_SETTINGS_URL);
+    const s = json?.data || {};
+
+    // ✅ marquee
+    if (typeof s.marqueeText === "string" && s.marqueeText.trim()) {
+      setMarqueeText(s.marqueeText);
+      setMarqueeDraft(s.marqueeText);
+    }
+
+    // ✅ poster (optional, but good)
+    if (typeof s.posterUrl === "string" && s.posterUrl.trim()) {
+      setPosterPreview(s.posterUrl);
+    }
+  } catch (err) {
+    console.warn("fetchHomeSettings failed:", err?.message);
+  }
+};
+
+
+  const fetchVideos = async () => {
+  try {
+    const json = await apiFetch(VIDEOS_API_URL);
+    const list = normalizeArrayResponse(json);
+    setSavedVideos(list);
+  } catch (err) {
+    console.error("Fetch videos failed:", err);
+    setVideoMessage(err.message || "Failed to load videos");
+    setTimeout(() => setVideoMessage(""), 3000);
+  }
+};
+
+
   // ------------------------------
   // Storage helpers (Videos only)
   // ------------------------------
-  const saveVideosToStorage = (videosArr) => {
-    localStorage.setItem(VIDEOS_STORAGE_KEY, JSON.stringify(videosArr));
-  };
+  // const saveVideosToStorage = (videosArr) => {
+  //   localStorage.setItem(VIDEOS_STORAGE_KEY, JSON.stringify(videosArr));
+  // };
 
   // ------------------------------
   // Initial load
@@ -215,12 +270,13 @@ const HomeAdmin = () => {
     }
 
     try {
-      const savedVids = JSON.parse(localStorage.getItem(VIDEOS_STORAGE_KEY) || "[]");
-      if (Array.isArray(savedVids)) setSavedVideos(savedVids);
+      // const savedVids = JSON.parse(localStorage.getItem(VIDEOS_STORAGE_KEY) || "[]");
+      // if (Array.isArray(savedVids)) setSavedVideos(savedVids);
     } catch (err) {
       console.error("Error loading videos:", err);
     }
-
+      fetchHomeSettings();
+    fetchVideos();
     fetchFolders();
     fetchAudioList();
     fetchNotifications();
@@ -262,9 +318,10 @@ const HomeAdmin = () => {
     setAdminLoading(true);
 
     try {
-      if (!adminPass || adminPass.length < 8) {
-        throw new Error("Password must be at least 8 characters.");
-      }
+     if (!adminPass) {
+  throw new Error("Password is required.");
+}
+
 
       const resp = await adminLoginGet({
         email: ADMIN_EMAIL,
@@ -341,18 +398,23 @@ const HomeAdmin = () => {
   // ------------------------------
   // Marquee
   // ------------------------------
-  const handleApplyMarquee = () => {
-    const trimmed = marqueeDraft.trim();
-    if (!trimmed) {
-      setMarqueeMessage("Marquee text cannot be empty.");
-      setTimeout(() => setMarqueeMessage(""), 2500);
-      return;
-    }
+const handleApplyMarquee = async () => {
+  const trimmed = marqueeDraft.trim();
+  if (!trimmed) return;
+
+  try {
+    await apiFetch(HOME_SETTINGS_URL, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ marqueeText: trimmed }),
+    });
+
     setMarqueeText(trimmed);
-    localStorage.setItem("mainMarqueeText", trimmed);
-    setMarqueeMessage("Marquee text updated for all users ✨");
-    setTimeout(() => setMarqueeMessage(""), 3000);
-  };
+    setMarqueeMessage("Updated for all users ✅");
+  } catch (e) {
+    setMarqueeMessage(e.message);
+  }
+};
 
   // ===========================================================================
   // ✅ GALLERY (Folders + Images) — CRUD
@@ -642,6 +704,9 @@ const HomeAdmin = () => {
     }
   };
 
+  const HOME_SETTINGS_URL = `${API_BASE_URL}/settings/home`;
+
+
   // ===========================================================================
   // ✅ NOTIFICATIONS — CRUD
   // ===========================================================================
@@ -773,52 +838,71 @@ const HomeAdmin = () => {
   // ===========================================================================
   // VIDEO
   // ===========================================================================
-  const handleVideoSubmit = async (e) => {
-    e.preventDefault();
-    const title = videoTitle.trim();
-    const url = videoUrlState.trim();
+const handleVideoSubmit = async (e) => {
+  e.preventDefault();
 
-    if (!title || !url) {
-      setVideoMessage("Please enter both title and video URL.");
-      setTimeout(() => setVideoMessage(""), 3000);
-      return;
-    }
+  const title = videoTitle.trim();
+  const url = videoUrlState.trim();
 
-    setVideoUploading(true);
-    setVideoMessage("");
+  if (!title || !url) {
+    setVideoMessage("Please enter both title and YouTube URL.");
+    setTimeout(() => setVideoMessage(""), 3000);
+    return;
+  }
 
-    const newVideo = { id: Date.now(), title, url };
+  setVideoUploading(true);
+  setVideoMessage("");
 
-    try {
-      await apiFetch(VIDEOS_API_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, youtubeUrl: url }),
-      });
-    } catch (err) {
-      console.error("Video API request failed:", err);
-    }
-
-    setSavedVideos((prev) => {
-      const updated = [...prev, newVideo];
-      saveVideosToStorage(updated);
-      return updated;
+  try {
+    // ✅ correct body: { title, url }
+    const json = await apiFetch(VIDEOS_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, url }),
     });
 
-    setVideoMessage("Video saved for users ✨");
+    const created = normalizeItemResponse(json);
+
+    setVideoMessage("Video saved for all users ✅");
     setVideoTitle("");
     setVideoUrlState("");
-    setTimeout(() => setVideoMessage(""), 3000);
-    setVideoUploading(false);
-  };
 
-  const handleRemoveVideo = (id) => {
-    setSavedVideos((prev) => {
-      const updated = prev.filter((v) => v.id !== id);
-      saveVideosToStorage(updated);
-      return updated;
+    // ✅ refresh list from DB so admin/user always match
+    await fetchVideos();
+
+    setTimeout(() => setVideoMessage(""), 2500);
+  } catch (err) {
+    console.error("Create video failed:", err);
+    setVideoMessage(err.message || "Failed to save video");
+    setTimeout(() => setVideoMessage(""), 3500);
+  } finally {
+    setVideoUploading(false);
+  }
+};
+
+
+const handleRemoveVideo = async (videoItem) => {
+  const id = getId(videoItem);
+  if (!id) return;
+
+  const ok = window.confirm("Delete this video?");
+  if (!ok) return;
+
+  try {
+    await apiFetch(`${VIDEOS_API_URL}/${encodeURIComponent(id)}`, {
+      method: "DELETE",
     });
-  };
+
+    setVideoMessage("Video deleted ✅");
+    await fetchVideos();
+    setTimeout(() => setVideoMessage(""), 2500);
+  } catch (err) {
+    console.error("Delete video failed:", err);
+    setVideoMessage(err.message || "Failed to delete video");
+    setTimeout(() => setVideoMessage(""), 3500);
+  }
+};
+
 
   // ===========================================================================
   // AUDIO
@@ -974,9 +1058,10 @@ const HomeAdmin = () => {
                 placeholder="Admin password"
                 className="w-full px-4 py-2 rounded-lg bg-white/80 focus:bg-white text-gray-800 placeholder-gray-500 border border-gray-300 focus:ring-2 focus:ring-orange-400 outline-none transition"
               />
-              <p className="text-[11px] text-yellow-50/90 mt-1">
-                Password must be at least 8 characters.
-              </p>
+             <p className="text-[11px] text-yellow-50/90 mt-1">
+  Static password: <b>Admin</b>
+</p>
+
             </div>
 
             {adminErr ? <p className="text-red-200 text-sm">{adminErr}</p> : null}
@@ -1494,25 +1579,29 @@ const HomeAdmin = () => {
               <p className="text-sm text-gray-600">No videos added yet.</p>
             ) : (
               <ul className="space-y-2">
-                {savedVideos.map((v) => (
-                  <li key={v.id} className="bg-orange-50 border border-orange-100 rounded-xl px-3 py-3">
-                    <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-                      <div className="flex-1 min-w-0">
-                        <div className="font-semibold text-orange-800 text-sm line-clamp-1">{v.title}</div>
-                        <div className="text-xs text-gray-600 break-all sm:break-words sm:truncate">{v.url}</div>
-                      </div>
+               {savedVideos.map((v) => {
+  const id = getId(v);
+  return (
+    <li key={id} className="bg-orange-50 border border-orange-100 rounded-xl px-3 py-3">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="font-semibold text-orange-800 text-sm line-clamp-1">{v.title}</div>
+          <div className="text-xs text-gray-600 break-all sm:break-words sm:truncate">{v.url}</div>
+        </div>
 
-                      <div className="sm:ml-auto flex items-center justify-end">
-                        <button
-                          onClick={() => handleRemoveVideo(v.id)}
-                          className="whitespace-nowrap text-xs bg-red-500 hover:bg-red-600 text-white rounded-full px-4 py-1.5 shadow-sm"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </div>
-                  </li>
-                ))}
+        <div className="sm:ml-auto flex items-center justify-end">
+          <button
+            onClick={() => handleRemoveVideo(v)}
+            className="whitespace-nowrap text-xs bg-red-500 hover:bg-red-600 text-white rounded-full px-4 py-1.5 shadow-sm"
+          >
+            Remove
+          </button>
+        </div>
+      </div>
+    </li>
+  );
+})}
+
               </ul>
             )}
           </div>
@@ -1635,7 +1724,7 @@ const HomeAdmin = () => {
           </div>
 
           {/* ✅ Notifications Manager */}
-          <div className="bg-white/80 rounded-2xl shadow-lg p-4 sm:p-6 border border-orange-100">
+          {/* <div className="bg-white/80 rounded-2xl shadow-lg p-4 sm:p-6 border border-orange-100">
             <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-4">
               <div>
                 <h3 className="text-xl sm:text-2xl font-semibold text-orange-700 mb-1">
@@ -1744,7 +1833,7 @@ const HomeAdmin = () => {
                 ✅ Uses API: <span className="font-semibold">{NOTIFICATIONS_URL}</span>
               </p>
             </div>
-          </div>
+          </div> */}
         </motion.section>
       </main>
     </motion.div>

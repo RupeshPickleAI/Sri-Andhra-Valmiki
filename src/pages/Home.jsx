@@ -1,3 +1,4 @@
+// src/pages/Home.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import templeImg from "../assets/1.jpeg";
@@ -5,7 +6,6 @@ import bgImg from "../assets/bg.jpg";
 import Articles from "./Articles";
 import Gallery from "./Gallery";
 import { Link } from "react-router-dom";
-import PhotoLibraryIcon from "@mui/icons-material/PhotoLibrary";
 import VideoLibraryIcon from "@mui/icons-material/VideoLibrary";
 import PlayCircleFilledIcon from "@mui/icons-material/PlayCircleFilled";
 import CloseIcon from "@mui/icons-material/Close";
@@ -17,22 +17,55 @@ import { useTranslation } from "react-i18next";
 import LanguageSwitcher from "../components/LanguageSwitcher";
 
 const API_BASE_URL = "http://localhost:5000/api";
-const VIDEOS_API_URL = "http://localhost:5000/api/videos/";
-const VIDEOS_STORAGE_KEY = "bhaktiVideos";
+const VIDEOS_API_URL = `${API_BASE_URL}/videos`;
+const HOME_SETTINGS_URL = `${API_BASE_URL}/settings/home`;
 
 const DEFAULT_MARQUEE =
   "🌸 Hare Krishna Hare Rama — Chant the name of the Lord and find peace within your heart. 🌸";
 
+// ------------------------------
+// Helpers
+// ------------------------------
+function normalizeArrayResponse(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (raw && Array.isArray(raw.data)) return raw.data;
+  if (raw && Array.isArray(raw.items)) return raw.items;
+  if (raw && Array.isArray(raw.results)) return raw.results;
+  return [];
+}
+
+function getId(item) {
+  if (!item) return null;
+  return item._id ?? item.id ?? null;
+}
+
 function extractYouTubeId(url = "") {
   try {
-    if (url.includes("youtu.be/")) return url.split("youtu.be/")[1].split(/[?&/]/)[0];
-    if (url.includes("/embed/")) return url.split("/embed/")[1].split(/[?&/]/)[0];
-    const match = url.match(/[?&]v=([^&]+)/);
+    const s = String(url || "").trim();
+    if (!s) return null;
+
+    if (s.includes("youtu.be/")) return s.split("youtu.be/")[1].split(/[?&/]/)[0];
+    if (s.includes("/embed/")) return s.split("/embed/")[1].split(/[?&/]/)[0];
+    if (s.includes("/shorts/")) return s.split("/shorts/")[1].split(/[?&/]/)[0];
+
+    const match = s.match(/[?&]v=([^&]+)/);
     if (match) return match[1];
-    return /^[A-Za-z0-9_-]{6,}$/.test(url.trim()) ? url.trim() : null;
+
+    // sometimes backend might send only id
+    return /^[A-Za-z0-9_-]{6,}$/.test(s) ? s : null;
   } catch {
     return null;
   }
+}
+
+function buildEmbedUrl(video) {
+  // ✅ if backend sends embedUrl (recommended), use it
+  if (video?.embedUrl) return video.embedUrl;
+
+  const id = extractYouTubeId(video?.url || "");
+  if (!id) return "";
+
+  return `https://www.youtube-nocookie.com/embed/${id}`;
 }
 
 const Home = () => {
@@ -41,94 +74,98 @@ const Home = () => {
   const [heroImg, setHeroImg] = useState(templeImg);
   const [marqueeText, setMarqueeText] = useState(DEFAULT_MARQUEE);
 
-  // ✅ Videos (Top 5)
+  // ✅ Videos
   const [videos, setVideos] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [floating, setFloating] = useState(null);
 
-  const fallbackDefaults = [
-    { id: 1, title: "Sri Rama Bhajan", url: "https://www.youtube.com/watch?v=tBgNNFazxKo8" },
-    { id: 2, title: "Govinda Jai Jai – Evening Kirtan", url: "https://youtu.be/hpNNFazxKo8" },
-    { id: 3, title: "Meditation Through Bhajan", url: "https://youtu.be/EuAT7iywR_0" },
-    { id: 4, title: "Radhe Shyam Devotional Chant", url: "https://youtu.be/Qf0xHSB656w" },
-    { id: 5, title: "Krishna Leela Kirtan", url: "https://youtu.be/tZKHQD6oC2s" },
-    { id: 6, title: "Morning Aarti – Harati Bhajan", url: "https://www.youtube.com/watch?v=QbKQy2dZ7sw" },
-  ];
-
+  // ------------------------------
+  // ✅ Load Home Settings (banner + marquee) FROM BACKEND (GLOBAL)
+  // ------------------------------
   useEffect(() => {
     const loadHomeSettings = async () => {
-      const savedMarquee = localStorage.getItem("mainMarqueeText");
-      if (savedMarquee && savedMarquee.trim()) setMarqueeText(savedMarquee);
-
       try {
-        const res = await fetch(`${API_BASE_URL}/settings/home`, { cache: "no-store" });
+        const res = await fetch(HOME_SETTINGS_URL, { cache: "no-store" });
         const json = await res.json();
-        const poster = json?.data?.posterUrl;
+        const s = json?.data || {};
 
-        if (poster && String(poster).trim()) {
+        // ✅ GLOBAL marquee (for all users)
+        const mt = typeof s.marqueeText === "string" ? s.marqueeText.trim() : "";
+        if (mt) setMarqueeText(mt);
+        else setMarqueeText(DEFAULT_MARQUEE);
+
+        // ✅ GLOBAL poster (for all users)
+        const poster = typeof s.posterUrl === "string" ? s.posterUrl.trim() : "";
+        if (poster) {
           setHeroImg(`${poster}?t=${Date.now()}`);
-          return;
+        } else {
+          setHeroImg(templeImg);
         }
-      } catch {}
 
-      const savedPoster = localStorage.getItem("mainPosterUrl");
-      if (savedPoster && savedPoster.trim()) {
-        setHeroImg(`${savedPoster}?t=${Date.now()}`);
         return;
+      } catch (e) {
+        // ignore and fallback
       }
 
+      // ✅ fallback only if backend is down
+      setMarqueeText(DEFAULT_MARQUEE);
       setHeroImg(templeImg);
     };
 
     loadHomeSettings();
   }, []);
 
-  // ✅ Load videos for home preview
+  // ------------------------------
+  // ✅ Load videos ONLY from DB (Top 5 later)
+  // ------------------------------
   useEffect(() => {
     const loadVideos = async () => {
       try {
-        const res = await fetch(VIDEOS_API_URL);
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data) && data.length) {
-            setVideos(
-              data.map((v, idx) => ({
-                id: v.id ?? idx + 1,
-                title: v.title,
-                url: v.url,
-              }))
-            );
-            return;
-          }
-        }
-      } catch {}
+        const res = await fetch(VIDEOS_API_URL, { cache: "no-store" });
+        const json = await res.json();
 
-      try {
-        const saved = JSON.parse(localStorage.getItem(VIDEOS_STORAGE_KEY) || "[]");
-        if (Array.isArray(saved) && saved.length) {
-          setVideos(saved);
-          return;
-        }
-      } catch {}
+        const list = normalizeArrayResponse(json);
 
-      setVideos(fallbackDefaults);
+        // keep consistent structure for UI
+        const mapped = list
+          .map((v) => ({
+            _id: v._id ?? v.id ?? null,
+            title: v.title || "Untitled",
+            url: v.url || "",
+            embedUrl: v.embedUrl || "",
+          }))
+          .filter((v) => v.title && (v.embedUrl || v.url)); // basic safety
+
+        setVideos(mapped);
+      } catch (err) {
+        console.error("Failed to load videos from API:", err);
+        setVideos([]); // ✅ no local fallback so admin/user always match
+      }
     };
 
     loadVideos();
   }, []);
 
+  // ------------------------------
+  // UI helpers
+  // ------------------------------
   const marqueeToShow = useMemo(() => {
+    // ✅ If admin changed marquee, show exactly that string.
+    // ✅ If it's default, use translations
     if (marqueeText === DEFAULT_MARQUEE) return t("marquee_default");
     return marqueeText;
   }, [marqueeText, t, i18n.language]);
 
   const toggleInline = (id) => setActiveId((prev) => (prev === id ? null : id));
+
   const openFloating = (video, fullscreen = false) => {
     setActiveId(null);
     setFloating({ video, fullscreen });
   };
+
   const closeFloating = () => setFloating(null);
 
+  // ✅ ALWAYS show top 5 from DB
   const top5Videos = useMemo(() => videos.slice(0, 5), [videos]);
 
   return (
@@ -139,7 +176,7 @@ const Home = () => {
       exit={{ opacity: 0, y: -20 }}
       transition={{ duration: 1.2, ease: "easeInOut" }}
     >
-      {/* ✅ HERO (Image only - no black band) */}
+      {/* ✅ HERO */}
       <div className="w-full">
         <div className="relative w-full">
           <img
@@ -170,7 +207,7 @@ const Home = () => {
           </div>
         </div>
 
-        {/* ✅ ENHANCED: About Him info with Devotional Background IMAGE */}
+        {/* ✅ About Him card (your existing block unchanged) */}
         <div className="px-4 sm:px-6 md:px-8 lg:px-16 pb-10 sm:pb-12 bg-gradient-to-b from-amber-50/10 via-white to-slate-50">
           <div className="max-w-5xl mx-auto">
             <motion.div
@@ -180,36 +217,26 @@ const Home = () => {
               viewport={{ once: true }}
               className="relative rounded-3xl shadow-2xl overflow-hidden"
             >
-              {/* ✨ Devotional Background Image Layer */}
-              <div 
+              <div
                 className="absolute inset-0 bg-cover bg-center bg-no-repeat"
-                style={{
-                  backgroundImage: `url('${bgImg}')`,
-                }}
+                style={{ backgroundImage: `url('${bgImg}')` }}
               >
-                {/* Dark overlay for readability */}
                 <div className="absolute inset-0 bg-gradient-to-br from-orange-900/85 via-amber-900/80 to-orange-800/85"></div>
-                
-                {/* Additional texture overlay */}
                 <div className="absolute inset-0 bg-black/20"></div>
               </div>
 
-              {/* Decorative pattern overlay */}
-              <div 
+              <div
                 className="absolute inset-0 opacity-10"
                 style={{
                   backgroundImage: `url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M50 10 L60 40 L90 40 L67 57 L77 87 L50 70 L23 87 L33 57 L10 40 L40 40 Z' fill='%23ffffff' fill-opacity='0.3'/%3E%3C/svg%3E")`,
-                  backgroundSize: '80px 80px'
+                  backgroundSize: "80px 80px",
                 }}
-              ></div>
+              />
 
-              {/* Content with backdrop blur for readability */}
               <div className="relative">
-                {/* Top decorative stripe */}
                 <div className="h-2 bg-gradient-to-r from-orange-400 via-amber-400 to-orange-400 shadow-lg"></div>
 
                 <div className="p-5 sm:p-7 md:p-8">
-                  {/* header */}
                   <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                     <div>
                       <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-orange-500 to-amber-500 text-white shadow-xl border-2 border-white/30">
@@ -228,7 +255,6 @@ const Home = () => {
                       </p>
                     </div>
 
-                    {/* meta chips with enhanced styling */}
                     <div className="flex flex-wrap gap-2 sm:justify-end">
                       <span className="text-xs sm:text-sm px-3 py-2 rounded-full bg-white/95 backdrop-blur-md border-2 border-orange-200 text-orange-800 font-semibold shadow-lg">
                         {t("home_subbarao_meta_born")}
@@ -242,7 +268,6 @@ const Home = () => {
                     </div>
                   </div>
 
-                  {/* body with enhanced readability */}
                   <div className="mt-6 grid grid-cols-1 gap-4">
                     <p className="text-sm sm:text-base text-white leading-relaxed bg-black/30 backdrop-blur-md p-4 rounded-xl border border-white/20 shadow-lg">
                       {t("home_subbarao_para_1")}
@@ -258,7 +283,6 @@ const Home = () => {
                     </p>
                   </div>
 
-                  {/* footer CTA with enhanced design */}
                   <div className="mt-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-black/30 backdrop-blur-md p-4 rounded-xl border border-white/20 shadow-lg">
                     <div className="text-xs sm:text-sm text-orange-100 font-medium italic">
                       {t("home_subbarao_footer_note")}
@@ -274,14 +298,18 @@ const Home = () => {
                   </div>
                 </div>
 
-                {/* Bottom decorative stripe */}
                 <div className="h-2 bg-gradient-to-r from-orange-400 via-amber-400 to-orange-400 shadow-lg"></div>
               </div>
 
-              {/* Floating decorative elements with glow */}
               <div className="absolute top-8 right-8 w-32 h-32 bg-orange-400/30 rounded-full blur-3xl animate-pulse"></div>
-              <div className="absolute bottom-8 left-8 w-40 h-40 bg-amber-400/30 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }}></div>
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-48 h-48 bg-orange-300/20 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '0.5s' }}></div>
+              <div
+                className="absolute bottom-8 left-8 w-40 h-40 bg-amber-400/30 rounded-full blur-3xl animate-pulse"
+                style={{ animationDelay: "1s" }}
+              ></div>
+              <div
+                className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-48 h-48 bg-orange-300/20 rounded-full blur-3xl animate-pulse"
+                style={{ animationDelay: "0.5s" }}
+              ></div>
             </motion.div>
           </div>
         </div>
@@ -299,7 +327,7 @@ const Home = () => {
         <Articles />
       </motion.div>
 
-      {/* ✅ VIDEOS PREVIEW (TOP 5) */}
+      {/* ✅ VIDEOS PREVIEW (TOP 5 from DB) */}
       <motion.section
         id="videos-preview"
         className="px-4 sm:px-6 lg:px-12 xl:px-16 py-12 sm:py-16 bg-gradient-to-b from-amber-50/30 via-orange-50/40 to-slate-50"
@@ -325,100 +353,117 @@ const Home = () => {
           </p>
         </div>
 
-        <div className="max-w-7xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {top5Videos.map((v, index) => {
-            const vid = extractYouTubeId(v.url) || "";
-            const thumb = vid ? `https://img.youtube.com/vi/${vid}/hqdefault.jpg` : "/placeholder.png";
-            const isActive = activeId === v.id;
+        {top5Videos.length === 0 ? (
+          <div className="max-w-3xl mx-auto text-center bg-white border border-orange-100 rounded-2xl p-6 shadow">
+            <p className="text-slate-700 font-semibold">No videos yet.</p>
+            <p className="text-sm text-slate-500 mt-1">
+              Admin can upload videos from the Admin Panel.
+            </p>
+          </div>
+        ) : (
+          <div className="max-w-7xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {top5Videos.map((v, index) => {
+              const id = getId(v) ?? index;
+              const isActive = activeId === id;
 
-            return (
-              <motion.div
-                key={v.id}
-                className="group bg-white rounded-2xl overflow-hidden border-2 border-slate-200 hover:border-orange-300 shadow-lg hover:shadow-2xl transition-all duration-300"
-                initial={{ opacity: 0, y: 18 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.45, delay: index * 0.08 }}
-                viewport={{ once: true }}
-                whileHover={{ y: -6 }}
-              >
-                <div className="relative w-full aspect-video bg-black">
-                  {isActive && vid ? (
-                    <iframe
-                      src={`https://www.youtube.com/embed/${vid}?autoplay=1&rel=0&modestbranding=1`}
-                      title={v.title}
-                      className="absolute top-0 left-0 w-full h-full"
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                      allowFullScreen
-                    />
-                  ) : (
-                    <>
-                      <img
-                        src={thumb}
-                        alt={v.title}
-                        className="absolute top-0 left-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+              const vid = extractYouTubeId(v.url) || extractYouTubeId(v.embedUrl) || "";
+              const thumb = vid
+                ? `https://img.youtube.com/vi/${vid}/hqdefault.jpg`
+                : "/placeholder.png";
+
+              const embed = buildEmbedUrl(v);
+
+              return (
+                <motion.div
+                  key={id}
+                  className="group bg-white rounded-2xl overflow-hidden border-2 border-slate-200 hover:border-orange-300 shadow-lg hover:shadow-2xl transition-all duration-300"
+                  initial={{ opacity: 0, y: 18 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.45, delay: index * 0.08 }}
+                  viewport={{ once: true }}
+                  whileHover={{ y: -6 }}
+                >
+                  <div className="relative w-full aspect-video bg-black">
+                    {isActive && embed ? (
+                      <iframe
+                        src={`${embed}?autoplay=1&rel=0&modestbranding=1`}
+                        title={v.title}
+                        className="absolute top-0 left-0 w-full h-full"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
                       />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/15 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <motion.button
-                          onClick={() => toggleInline(v.id)}
-                          whileHover={{ scale: 1.08 }}
-                          whileTap={{ scale: 0.95 }}
-                          className="relative"
-                        >
-                          <PlayCircleFilledIcon className="!text-7xl text-white drop-shadow-2xl hover:text-orange-300 transition-colors" />
-                        </motion.button>
-                      </div>
-                    </>
-                  )}
-
-                  <div className="absolute top-3 right-3 flex gap-2">
-                    {isActive ? (
+                    ) : (
                       <>
+                        <img
+                          src={thumb}
+                          alt={v.title}
+                          className="absolute top-0 left-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/15 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <motion.button
+                            onClick={() => toggleInline(id)}
+                            whileHover={{ scale: 1.08 }}
+                            whileTap={{ scale: 0.95 }}
+                            className="relative"
+                          >
+                            <PlayCircleFilledIcon className="!text-7xl text-white drop-shadow-2xl hover:text-orange-300 transition-colors" />
+                          </motion.button>
+                        </div>
+                      </>
+                    )}
+
+                    <div className="absolute top-3 right-3 flex gap-2">
+                      {isActive ? (
+                        <>
+                          <motion.button
+                            onClick={() => openFloating(v, true)}
+                            className="bg-white/90 hover:bg-white text-orange-600 rounded-full w-9 h-9 flex items-center justify-center shadow-lg"
+                            title="Open fullscreen"
+                            whileHover={{ scale: 1.08 }}
+                            whileTap={{ scale: 0.9 }}
+                          >
+                            <OpenInNewIcon fontSize="small" />
+                          </motion.button>
+                          <motion.button
+                            onClick={() => setActiveId(null)}
+                            className="bg-white/90 hover:bg-white text-orange-600 rounded-full w-9 h-9 flex items-center justify-center shadow-lg"
+                            title="Stop"
+                            whileHover={{ scale: 1.08 }}
+                            whileTap={{ scale: 0.9 }}
+                          >
+                            <CloseIcon fontSize="small" />
+                          </motion.button>
+                        </>
+                      ) : (
                         <motion.button
-                          onClick={() => openFloating(v, true)}
-                          className="bg-white/90 hover:bg-white text-orange-600 rounded-full w-9 h-9 flex items-center justify-center shadow-lg"
-                          title="Open fullscreen"
+                          onClick={() => openFloating(v, false)}
+                          className="bg-white/90 hover:bg-white text-orange-600 rounded-full w-9 h-9 flex items-center justify-center shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                          title="Open player"
                           whileHover={{ scale: 1.08 }}
                           whileTap={{ scale: 0.9 }}
                         >
                           <OpenInNewIcon fontSize="small" />
                         </motion.button>
-                        <motion.button
-                          onClick={() => setActiveId(null)}
-                          className="bg-white/90 hover:bg-white text-orange-600 rounded-full w-9 h-9 flex items-center justify-center shadow-lg"
-                          title="Stop"
-                          whileHover={{ scale: 1.08 }}
-                          whileTap={{ scale: 0.9 }}
-                        >
-                          <CloseIcon fontSize="small" />
-                        </motion.button>
-                      </>
-                    ) : (
-                      <motion.button
-                        onClick={() => openFloating(v, false)}
-                        className="bg-white/90 hover:bg-white text-orange-600 rounded-full w-9 h-9 flex items-center justify-center shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
-                        title="Open player"
-                        whileHover={{ scale: 1.08 }}
-                        whileTap={{ scale: 0.9 }}
-                      >
-                        <OpenInNewIcon fontSize="small" />
-                      </motion.button>
-                    )}
+                      )}
+                    </div>
                   </div>
-                </div>
 
-                <div className="p-5 bg-gradient-to-b from-white to-orange-50/30">
-                  <h3 className="text-lg font-bold text-slate-800 mb-1 line-clamp-2 group-hover:text-orange-600 transition-colors">
-                    {v.title}
-                  </h3>
-                  <p className="text-sm text-slate-500">{vid ? "Devotional Content" : "Invalid URL"}</p>
-                </div>
+                  <div className="p-5 bg-gradient-to-b from-white to-orange-50/30">
+                    <h3 className="text-lg font-bold text-slate-800 mb-1 line-clamp-2 group-hover:text-orange-600 transition-colors">
+                      {v.title}
+                    </h3>
+                    <p className="text-sm text-slate-500">
+                      {embed ? "Devotional Content" : "Invalid URL"}
+                    </p>
+                  </div>
 
-                <div className="h-1 bg-gradient-to-r from-orange-500 via-amber-500 to-orange-500 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-300 origin-left" />
-              </motion.div>
-            );
-          })}
-        </div>
+                  <div className="h-1 bg-gradient-to-r from-orange-500 via-amber-500 to-orange-500 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-300 origin-left" />
+                </motion.div>
+              );
+            })}
+          </div>
+        )}
 
         <div className="text-center mt-10">
           <Link
@@ -513,15 +558,18 @@ const Home = () => {
           animate={{ scale: 1, opacity: 1 }}
           exit={{ scale: 0.8, opacity: 0 }}
         >
-          <iframe
-            src={`https://www.youtube.com/embed/${extractYouTubeId(
-              floating.video.url
-            )}?autoplay=1&rel=0&modestbranding=1`}
-            title={floating.video.title}
-            className={`w-full h-full ${floating.fullscreen ? "" : "rounded-2xl"}`}
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowFullScreen
-          />
+          {(() => {
+            const embed = buildEmbedUrl(floating.video);
+            return (
+              <iframe
+                src={`${embed}?autoplay=1&rel=0&modestbranding=1`}
+                title={floating.video.title}
+                className={`w-full h-full ${floating.fullscreen ? "" : "rounded-2xl"}`}
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+              />
+            );
+          })()}
 
           <div className="absolute top-3 right-3 flex gap-2">
             <motion.button

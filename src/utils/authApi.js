@@ -1,13 +1,5 @@
 // src/utils/authApi.js
-import axios from "axios";
-
-const API_BASE_URL =
-  import.meta?.env?.VITE_API_BASE_URL || "http://localhost:5000";
-
-const api = axios.create({
-  baseURL: API_BASE_URL, // no /api here; we include /api in endpoints below
-  headers: { "Content-Type": "application/json" },
-});
+import api from "./apiClient";
 
 const getErr = (e) =>
   e?.response?.data?.detail ||
@@ -40,8 +32,6 @@ export async function signupUser({ firstName, lastName, email, password, phone }
 // -----------------------------
 // ✅ USER LOGIN (NO OTP)
 // POST /api/auth/login/password
-// body: { email, password }
-// returns: { token, user? }
 // -----------------------------
 export async function loginWithPassword({ email, password }) {
   try {
@@ -56,8 +46,7 @@ export async function loginWithPassword({ email, password }) {
 }
 
 // -----------------------------
-// ✅ OTP (use ONLY in SIGNUP flow)
-// If your backend uses these same endpoints, keep them.
+// ✅ OTP (signup only)
 // POST /api/auth/login/request-otp
 // POST /api/auth/login/verify-otp
 // -----------------------------
@@ -100,12 +89,12 @@ export async function verifyOtp({ channel = "email", identifier, password, otp }
 
 // -----------------------------
 // GET USER DATA
-// GET /api/auth/me (Bearer token)
+// GET /api/auth/me (Bearer auto attached by apiClient, but still okay)
 // -----------------------------
 export async function getMe(token) {
   try {
     const { data } = await api.get("/api/auth/me", {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     return data;
   } catch (e) {
@@ -114,22 +103,10 @@ export async function getMe(token) {
 }
 
 // -----------------------------
-// ADMIN LOGIN (NO OTP)
-// POST /api/auth/admin/login
+// ✅ ADMIN LOGIN (GET ONLY)
+// GET /api/auth/admin/login?email=
+// &password=Admin
 // -----------------------------
-export async function adminLogin({ email, password }) {
-  try {
-    const { data } = await api.post("/api/auth/admin/login", {
-      email: String(email || "").trim().toLowerCase(),
-      password: String(password || ""),
-    });
-    return data;
-  } catch (e) {
-    throw new Error(getErr(e));
-  }
-}
-
-// optional legacy GET (only if your backend REALLY uses GET)
 export async function adminLoginGet({ email, password }) {
   try {
     const { data } = await api.get("/api/auth/admin/login", {
