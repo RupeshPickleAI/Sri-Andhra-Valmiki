@@ -8,7 +8,7 @@ import FullscreenIcon from "@mui/icons-material/Fullscreen";
 import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 
-const VIDEOS_API_URL = "http://localhost:5000/api/videos"; // no need trailing /
+const VIDEOS_API_URL = "https://sriandhravalmiki-merge.onrender.com/api/videos"; // no need trailing /
 
 function extractYouTubeId(url = "") {
   try {

@@ -3,7 +3,7 @@ import React, { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 
-const IMAGE_UPLOAD_URL = "http://localhost:5000/upload/image/";
+const IMAGE_UPLOAD_URL = "https://sriandhravalmiki-merge.onrender.com/upload/image/";
 
 const GalleryAdmin = () => {
   const [galleryImages, setGalleryImages] = useState([]);

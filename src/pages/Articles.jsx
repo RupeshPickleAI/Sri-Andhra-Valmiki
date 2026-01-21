@@ -11,7 +11,7 @@ import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import { useTranslation } from "react-i18next";
 
 // ✅ IMPORTANT: your content APIs are mounted at /api/content
-const API_BASE_URL = "http://localhost:5000/api/content";
+const API_BASE_URL = "https://sriandhravalmiki-merge.onrender.com/api/content";
 
 const normalizeArrayResponse = (raw) => {
   if (Array.isArray(raw)) return raw;

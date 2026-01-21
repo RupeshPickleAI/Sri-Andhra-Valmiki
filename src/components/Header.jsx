@@ -41,7 +41,7 @@ import LoginIcon from "@mui/icons-material/Login";
 // ✅ authSession
 import { authSession } from "../utils/authSession";
 
-const API_BASE = "http://localhost:5000";
+const API_BASE = "https://sriandhravalmiki-merge.onrender.com";
 const NOTIF_API_BASE = `${API_BASE}/api/notifications`;
 
 async function apiFetch(url, options = {}) {

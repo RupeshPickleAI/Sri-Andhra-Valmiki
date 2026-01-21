@@ -10,8 +10,8 @@ import {
 } from "@mui/icons-material";
 
 // API CONFIG
-const API_BASE_URL = "http://localhost:5000/api";
-const SERVER_ORIGIN = API_BASE_URL.replace(/\/api\/?$/, ""); // => http://localhost:5000
+const API_BASE_URL = "https://sriandhravalmiki-merge.onrender.com/api";
+const SERVER_ORIGIN = API_BASE_URL.replace(/\/api\/?$/, ""); // => https://sriandhravalmiki-merge.onrender.com
 
 const GALLERY_FOLDERS_URL = `${API_BASE_URL}/gallery/folders`;
 const folderImagesUrl = (id) => `${API_BASE_URL}/gallery/folders/${id}/images`;

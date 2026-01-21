@@ -15,7 +15,7 @@ const DEFAULT_MARQUEE =
 // ------------------------------
 // BASE URLS
 // ------------------------------
-const API_BASE_URL = "http://localhost:5000/api";
+const API_BASE_URL = "https://sriandhravalmiki-merge.onrender.com/api";
 
 // ✅ Notifications CRUD API
 const NOTIFICATIONS_URL = `${API_BASE_URL}/notifications`; // GET/POST

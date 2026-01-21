@@ -16,7 +16,7 @@ import InfoIcon from "@mui/icons-material/Info";
 import { useTranslation } from "react-i18next";
 import LanguageSwitcher from "../components/LanguageSwitcher";
 
-const API_BASE_URL = "http://localhost:5000/api";
+const API_BASE_URL = "https://sriandhravalmiki-merge.onrender.com/api";
 const VIDEOS_API_URL = `${API_BASE_URL}/videos`;
 const HOME_SETTINGS_URL = `${API_BASE_URL}/settings/home`;
 
